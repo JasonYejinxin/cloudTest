@@ -1,19 +1,22 @@
 import os
 import torch
-from transformers import BlipProcessor, BlipForConditionalGeneration
+from transformers import Blip2Processor, Blip2ForConditionalGeneration
 from PIL import Image
 import json
 from torch.optim import AdamW
 import torch.nn as nn
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
+print(f"okay i start")
 # 初始化 BLIP 处理器和模型
-processor = BlipProcessor.from_pretrained("Salesforce/blip2-flan-t5-xl")
-model = BlipForConditionalGeneration.from_pretrained("Salesforce/blip2-flan-t5-xl", ignore_mismatched_sizes=True)
+model = Blip2ForConditionalGeneration.from_pretrained("Salesforce/blip2-flan-t5-xl")
+print(f"okay the 2nd sentence")
+processor = Blip2Processor.from_pretrained("Salesforce/blip2-flan-t5-xl")
+print(f"tekenizer is {processor.tokenizer}")
 model = model.to(device)
-
+print("okay, successfully load model")
 # 设置优化器
-optimizer = AdamW(filter(lambda p:p.requires_grad, model.parameters()), lr=5e-5)
+optimizer = AdamW(filter(lambda p:p.requires_grad, model.parameters()), lr=2e-5)
 
 # 加载 qa.json 数据
 qa_json_path = "/home/airlab/Desktop/Jingwen/MAPLMTest/baseline/evaluation/qaTrain_3Q_balanced.json"  # 替换为你的qa.json路径
@@ -99,7 +102,7 @@ def process_multimodal_data(qa_data, feature_method="aggregate"):
     return inputs, targets
 
 # 训练模型
-def train_model(qa_data, epochs=5, feature_method="concatenate"):
+def train_model(qa_data, epochs=20, feature_method="concatenate"):
     inputs, targets = process_multimodal_data(qa_data, feature_method)
 
     for epoch in range(epochs):
@@ -131,11 +134,12 @@ def train_model(qa_data, epochs=5, feature_method="concatenate"):
             print(f"Epoch{epoch + 1} completed, but loss was not coumputed")
 
         # 保存模型和处理器
-        model_save_path = f"./blip2_flan_t5_epoch_{epoch + 1}_{feature_method}"
-        processor_save_path = f"./blip2_flan_t5_epoch_{epoch + 1}_{feature_method}"
-        model.save_pretrained(model_save_path)
-        processor.save_pretrained(processor_save_path)
-        print(f"Model and processor saved at {model_save_path}")
+        if(epoch % 5 == 0)&(epoch != 0):
+            model_save_path = f"./blip2_flan_t5_epoch_{epoch + 5}_{feature_method}"
+            processor_save_path = f"./blip2_flan_t5_epoch_{epoch + 5}_{feature_method}"
+            model.save_pretrained(model_save_path)
+            processor.save_pretrained(processor_save_path)
+            print(f"Model and processor saved at {model_save_path}")
 
 # 启动训练 (指定特征处理方法：'aggregate' 或 'concatenate')
 train_model(qa_data, feature_method="concatenate")  # 或者改为 "concatenate"
