@@ -5,6 +5,9 @@ from PIL import Image
 import json
 from torch.optim import AdamW
 import torch.nn as nn
+from torch.utils.data import DataLoader, Dataset
+from torch.cuda.amp import GradScaler, autocast
+
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 print(f"okay i start")
@@ -31,9 +34,9 @@ def load_images_from_frame(frame_id):
     if not os.path.exists(frame_path):
         print(f"Warning: Frame folder {frame_id} not found. Skipping this entry.")
         return None
-    specific_images = ['photo_forward.jpg']
-    # img_names = sorted(os.listdir(frame_path))  # 确保文件按顺序读取
-    for img_name in specific_images:  # 加载最多 4 张图片
+
+    img_names = sorted(os.listdir(frame_path))  # 确保文件按顺序读取
+    for img_name in img_names[:1]:  # 加载最多 1 张图片
         img_path = os.path.join(frame_path, img_name)
         if img_path.endswith('.jpg') or img_path.endswith('.png'):
             img = Image.open(img_path).convert("RGB")
@@ -46,18 +49,8 @@ def aggregate_image_features(images):
     for img in images:
         inputs = processor(images=img, return_tensors="pt").pixel_values.to(device)
         pixel_values.append(inputs.to(device))
-    pixel_values = torch.cat(pixel_values, dim=0)  # [4, 3, H, W]
+    pixel_values = torch.cat(pixel_values, dim=0)  # [1, 3, H, W]
     return pixel_values.mean(dim=0, keepdim=True)  # [1, 3, H, W]
-channel_reduction = nn.Conv2d(in_channels = 6, out_channels = 3, kernel_size = 1).to(device)
-# 特征拼接
-def concatenate_image_features(images):
-    pixel_values = []
-    for img in images:
-        inputs = processor(images=img, return_tensors="pt").pixel_values.to(device)
-        pixel_values.append(inputs.to(device))
-    pixel_values = torch.cat(pixel_values,dim=1)
-    reduced = channel_reduction(pixel_values)
-    return reduced # [1, 3, H, W]
 
 # 处理多模态数据
 def process_multimodal_data(qa_data, feature_method="aggregate"):
@@ -76,10 +69,8 @@ def process_multimodal_data(qa_data, feature_method="aggregate"):
         # 根据指定方法处理图片特征
         if feature_method == "aggregate":
             pixel_values = aggregate_image_features(images)  # 平均池化
-        elif feature_method == "concatenate":
-            pixel_values = concatenate_image_features(images)  # 拼接特征
         else:
-            raise ValueError("Invalid feature method. Use 'aggregate' or 'concatenate'.")
+            raise ValueError("Invalid feature method. Use 'aggregate'.")
 
         for qa in qa_list:
             question = qa["question"]
@@ -101,45 +92,70 @@ def process_multimodal_data(qa_data, feature_method="aggregate"):
 
     return inputs, targets
 
+# 创建一个简单的数据集类
+class QADataset(Dataset):
+    def __init__(self, qa_data, feature_method="aggregate"):
+        self.qa_data = qa_data
+        self.feature_method = feature_method
+        self.inputs, self.targets = process_multimodal_data(qa_data, feature_method)
+
+    def __len__(self):
+        return len(self.inputs)
+
+    def __getitem__(self, idx):
+        input_ids, pixel_values = self.inputs[idx]
+        target_ids = self.targets[idx]
+        return input_ids, pixel_values, target_ids
+
 # 训练模型
-def train_model(qa_data, epochs=20, feature_method="concatenate"):
-    inputs, targets = process_multimodal_data(qa_data, feature_method)
+def train_model(qa_data, epochs=20, feature_method="aggregate"):
+    # 创建DataLoader
+    batch_size = 1  # 降低批量大小
+    dataset = QADataset(qa_data, feature_method="aggregate")
+    dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
+
+    # 创建GradScaler
+    scaler = GradScaler()
 
     for epoch in range(epochs):
         print(f"Starting epoch {epoch + 1}/{epochs}")
         model.train()
 
-    
-        for i in range(len(inputs)):
-            input_ids, pixel_values = inputs[i]
-            target_ids = targets[i]
+        for input_ids, pixel_values, target_ids in dataloader:
+            input_ids = input_ids.to(device)
+            pixel_values = pixel_values.to(device)
+            target_ids = target_ids.to(device)
 
             try:
-                outputs = model(input_ids=input_ids, labels=target_ids, pixel_values=pixel_values)
-                loss = outputs.loss
-           
+                optimizer.zero_grad()
+                with autocast():  # 自动混合精度
+                    outputs = model(input_ids=input_ids, labels=target_ids, pixel_values=pixel_values)
+                    loss = outputs.loss
+
                 if loss is not None:
-                  loss.backward()
-                  optimizer.step()
-                  optimizer.zero_grad()
+                    scaler.scale(loss).backward()  # 使用缩放的损失进行反向传播
+                    scaler.step(optimizer)  # 使用Scaler来更新参数
+                    scaler.update()  # 更新缩放器
+                    torch.cuda.empty_cache()  # 清空缓存，防止显存泄漏
             except Exception as e:
                 print(f"Error occurred: {e}")
                 print(f"input_ids shape: {input_ids.shape}")
                 print(f"pixel_values shape: {pixel_values.shape}")
                 print(f"labels shape: {target_ids.shape}")
                 continue
+
         if loss is not None:
-            print(f"Epoch {epoch + 1} completed. Loss:{loss.item()}")
+            print(f"Epoch {epoch + 1} completed. Loss: {loss.item()}")
         else:
-            print(f"Epoch{epoch + 1} completed, but loss was not coumputed")
+            print(f"Epoch {epoch + 1} completed, but loss was not computed")
 
         # 保存模型和处理器
-        if(epoch % 5 == 0)&(epoch != 0):
+        if(epoch % 5 == 0) & (epoch != 0):
             model_save_path = f"./blip2_flan_t5_epoch_{epoch + 5}_{feature_method}"
             processor_save_path = f"./blip2_flan_t5_epoch_{epoch + 5}_{feature_method}"
             model.save_pretrained(model_save_path)
             processor.save_pretrained(processor_save_path)
             print(f"Model and processor saved at {model_save_path}")
 
-# 启动训练 (指定特征处理方法：'aggregate' 或 'concatenate')
-train_model(qa_data, feature_method="concatenate")  # 或者改为 "concatenate"
+# 启动训练 (指定特征处理方法：'aggregate')
+train_model(qa_data, feature_method="aggregate")  # 或者改为 "concatenate"

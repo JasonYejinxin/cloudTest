@@ -1,19 +1,22 @@
 import os
 import torch
-from transformers import BlipProcessor, BlipForConditionalGeneration
+from transformers import Blip2Processor, Blip2ForConditionalGeneration
 from PIL import Image
 import json
 from torch.optim import AdamW
-
+import torch.nn as nn
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
+print(f"okay i start")
 # 初始化 BLIP 处理器和模型
-processor = BlipProcessor.from_pretrained("Salesforce/blip2-flan-t5-xl")
-model = BlipForConditionalGeneration.from_pretrained("Salesforce/blip2-flan-t5-xl", ignore_mismatched_sizes=True)
+model = Blip2ForConditionalGeneration.from_pretrained("Salesforce/blip2-flan-t5-xl")
+print(f"okay the 2nd sentence")
+processor = Blip2Processor.from_pretrained("Salesforce/blip2-flan-t5-xl")
+print(f"tekenizer is {processor.tokenizer}")
 model = model.to(device)
-
+print("okay, successfully load model")
 # 设置优化器
-optimizer = AdamW(model.parameters(), lr=5e-5)
+optimizer = AdamW(filter(lambda p:p.requires_grad, model.parameters()), lr=2e-5)
 
 # 加载 qa.json 数据
 qa_json_path = "/home/airlab/Desktop/Jingwen/MAPLMTest/baseline/evaluation/qaTrain_3Q_balanced.json"  # 替换为你的qa.json路径
@@ -42,17 +45,19 @@ def aggregate_image_features(images):
     pixel_values = []
     for img in images:
         inputs = processor(images=img, return_tensors="pt").pixel_values.to(device)
-        pixel_values.append(inputs)
+        pixel_values.append(inputs.to(device))
     pixel_values = torch.cat(pixel_values, dim=0)  # [4, 3, H, W]
     return pixel_values.mean(dim=0, keepdim=True)  # [1, 3, H, W]
-
+channel_reduction = nn.Conv2d(in_channels = 12, out_channels = 3, kernel_size = 1).to(device)
 # 特征拼接
 def concatenate_image_features(images):
     pixel_values = []
     for img in images:
         inputs = processor(images=img, return_tensors="pt").pixel_values.to(device)
-        pixel_values.append(inputs)
-    return torch.cat(pixel_values, dim=0)  # [4, 3, H, W]
+        pixel_values.append(inputs.to(device))
+    pixel_values = torch.cat(pixel_values,dim=1)
+    reduced = channel_reduction(pixel_values)
+    return reduced # [1, 3, H, W]
 
 # 处理多模态数据
 def process_multimodal_data(qa_data, feature_method="aggregate"):
@@ -97,39 +102,44 @@ def process_multimodal_data(qa_data, feature_method="aggregate"):
     return inputs, targets
 
 # 训练模型
-def train_model(qa_data, epochs=5, feature_method="aggregate"):
+def train_model(qa_data, epochs=20, feature_method="aggregate"):
     inputs, targets = process_multimodal_data(qa_data, feature_method)
 
     for epoch in range(epochs):
         print(f"Starting epoch {epoch + 1}/{epochs}")
         model.train()
 
+    
         for i in range(len(inputs)):
             input_ids, pixel_values = inputs[i]
             target_ids = targets[i]
 
             try:
                 outputs = model(input_ids=input_ids, labels=target_ids, pixel_values=pixel_values)
+                loss = outputs.loss
+           
+                if loss is not None:
+                  loss.backward()
+                  optimizer.step()
+                  optimizer.zero_grad()
             except Exception as e:
                 print(f"Error occurred: {e}")
                 print(f"input_ids shape: {input_ids.shape}")
                 print(f"pixel_values shape: {pixel_values.shape}")
                 print(f"labels shape: {target_ids.shape}")
                 continue
-
-            loss = outputs.loss
-            loss.backward()
-            optimizer.step()
-            optimizer.zero_grad()
-
-        print(f"Epoch {epoch + 1} completed. Loss: {loss.item()}")
+        if loss is not None:
+            print(f"Epoch {epoch + 1} completed. Loss:{loss.item()}")
+        else:
+            print(f"Epoch{epoch + 1} completed, but loss was not coumputed")
 
         # 保存模型和处理器
-        model_save_path = f"./blip2_flan_t5_epoch_{epoch + 1}_{feature_method}"
-        processor_save_path = f"./blip2_flan_t5_epoch_{epoch + 1}_{feature_method}"
-        model.save_pretrained(model_save_path)
-        processor.save_pretrained(processor_save_path)
-        print(f"Model and processor saved at {model_save_path}")
+        if(epoch % 5 == 0)&(epoch != 0):
+            model_save_path = f"./blip2_flan_t5_epoch_{epoch + 5}_{feature_method}"
+            processor_save_path = f"./blip2_flan_t5_epoch_{epoch + 5}_{feature_method}"
+            model.save_pretrained(model_save_path)
+            processor.save_pretrained(processor_save_path)
+            print(f"Model and processor saved at {model_save_path}")
 
 # 启动训练 (指定特征处理方法：'aggregate' 或 'concatenate')
 train_model(qa_data, feature_method="aggregate")  # 或者改为 "concatenate"
