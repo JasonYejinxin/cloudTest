@@ -1,3 +1,7 @@
+RuntimeError: CUDA error: out of memory
+CUDA kernel errors might be asynchronously reported at some other API call, so the stacktrace below might be incorrect.
+For debugging consider passing CUDA_LAUNCH_BLOCKING=1
+Compile with `TORCH_USE_CUDA_DSA` to enable device-side assertions.
 import os
 import torch
 from transformers import Blip2Processor, Blip2ForConditionalGeneration
