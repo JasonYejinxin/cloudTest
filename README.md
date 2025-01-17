@@ -14,3 +14,5 @@ Traceback (most recent call last):
   File "/home/airlab/anaconda3/lib/python3.12/site-packages/transformers/modeling_utils.py", line 4834, in _load_pretrained_model
     raise RuntimeError(f"Error(s) in loading state_dict for {model.__class__.__name__}:\n\t{error_msg}")
 RuntimeError: Error(s) in loading state_dict for BlipForConditionalGeneration:
+
+You are using a model of type blip-2 to instantiate a model of type blip. This is not supported for all configurations of models and can yield errors.
