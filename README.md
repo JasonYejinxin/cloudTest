@@ -49,9 +49,11 @@ def concatenate_image_features(images):
         inputs = processor(images=img, return_tensors="pt").pixel_values.to(device)
         pixel_values.append(inputs)
     pixel_values = torch.cat(pixel_values, dim=1)  # [1, 12, H, W]
+    
     # 使用卷积层将通道数减少到 3，确保与模型输入一致
     channel_reduction = nn.Conv2d(in_channels=12, out_channels=3, kernel_size=1).to(device)
-    reduced_pixel_values = channel_reduction(pixel_values)
+    with torch.no_grad():
+        reduced_pixel_values = channel_reduction(pixel_values)
     return reduced_pixel_values
 
 # 推理函数
@@ -62,21 +64,32 @@ def generate_answer(test_dir, question, feature_method="concatenate"):
     answers = {}
     # 对每一组图片进行推理
     for i, frame_images in enumerate(images):
+        print(f"Processing frame: {frame_names[i]}")
+        
         # 特征处理
-        if feature_method == "concatenate":
-            pixel_values = concatenate_image_features(frame_images)
-        else:
-            raise ValueError("Only 'concatenate' feature method is supported in this inference code.")
+        try:
+            if feature_method == "concatenate":
+                pixel_values = concatenate_image_features(frame_images)
+            else:
+                raise ValueError("Only 'concatenate' feature method is supported in this inference code.")
+        except Exception as e:
+            print(f"Error during feature processing for frame {frame_names[i]}: {e}")
+            answers[frame_names[i]] = "Error in feature processing"
+            continue
+
+        # 打印像素值形状用于调试
+        print(f"Pixel values shape for frame {frame_names[i]}: {pixel_values.shape}")
 
         # 处理问题
         text_inputs = processor(text=question, return_tensors="pt", padding=True, truncation=True).input_ids.to(device)
 
-        # 推理：先做前向推理获取 logits
+        # 推理
         with torch.no_grad():
             try:
                 # 获取模型的输出 logits
                 outputs = model.generate(input_ids=text_inputs, pixel_values=pixel_values, max_length=50)
                 
+                # 检查输出
                 if outputs is None or outputs.size(0) == 0:
                     print(f"No output generated for frame {frame_names[i]}")
                     answers[frame_names[i]] = "No answer generated"
