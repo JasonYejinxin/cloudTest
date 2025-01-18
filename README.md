@@ -1,1 +1,1 @@
-
+Hello, here is the training and inference code, and dataset(.json) of Paper "Generative AI: A Research to solve multiple tasks with Multimodal model in traffic scenes" Please refer to MAPLM for images and annotation.
